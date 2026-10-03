@@ -1,8 +1,156 @@
 <!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>海上搜救协调</title>
-<style>body{font:15px/1.6 system-ui,sans-serif;max-width:1100px;margin:30px auto;padding:0 20px;color:#17324d}table{border-collapse:collapse;width:100%;margin:16px 0}th,td{border:1px solid #cbd8e3;padding:8px;text-align:left}th{background:#edf5fb}code{background:#f2f5f7;padding:2px 5px}.card{background:#f7fbfe;border-left:5px solid #2784c7;padding:12px 16px}</style>
-<h1>海上搜救协调</h1><div class="card">页面读取实时状态。业务写入通过 README 中的 JSON API 完成，并需要 <code>X-User</code>、<code>X-Role</code>。</div>
-<h2>遇险事件</h2><table id="incidents"><thead><tr><th>编号</th><th>船名</th><th>状态</th><th>海况</th><th>负责机构</th><th>版本</th></tr></thead><tbody></tbody></table>
-<h2>资源</h2><table id="assets"><thead><tr><th>名称</th><th>类型</th><th>状态</th><th>航程</th></tr></thead><tbody></tbody></table>
-<h2>搜索区域</h2><table id="areas"><thead><tr><th>编号</th><th>事件</th><th>状态</th><th>优先级</th><th>资源</th></tr></thead><tbody></tbody></table>
+<style>
+body{font:15px/1.6 system-ui,sans-serif;max-width:1180px;margin:24px auto;padding:0 20px;color:#17324d}
+table{border-collapse:collapse;width:100%;margin:12px 0 26px}th,td{border:1px solid #cbd8e3;padding:6px 8px;text-align:left;font-size:14px}th{background:#edf5fb}
+code{background:#f2f5f7;padding:2px 5px}.card{background:#f7fbfe;border-left:5px solid #2784c7;padding:12px 16px;margin:12px 0}
+fieldset{border:1px solid #cbd8e3;margin:0 0 14px;padding:10px 14px}legend{font-weight:600}
+input,select,button{font:inherit;padding:4px 8px;margin:2px}button{cursor:pointer}
+#notice{padding:8px 12px;margin:10px 0;display:none}#notice.ok{display:block;background:#e8f7ec;border-left:4px solid #2c9e5f}#notice.err{display:block;background:#fdecea;border-left:4px solid #d0453e}
+#conflict{display:none;background:#fff8e6;border-left:5px solid #e0a800;padding:10px 14px;margin:10px 0;font-size:14px}
+.badge{padding:1px 6px;border-radius:4px;background:#e8eef4;font-size:12px;white-space:nowrap}
+.reason{color:#b23b2e}.muted{color:#6b7f90;font-size:12px}
+</style>
+<h1>海上搜救协调</h1>
+<div class="card">派单流程：创建派单（冻结事件/区域/资源版本）→ 开始执行 → 结束或复核。事件结束、资源撤回、海况更新后，<strong>未执行派单失效重算</strong>，<strong>执行中派单保留原依据并标记待复核</strong>。并发提交冲突时页面保留草稿并显示最新版本。</div>
+<div>
+  <label>用户 <input id="user" value="coord1" size="8"></label>
+  <label>角色 <select id="role"><option>coordinator</option><option>operator</option><option>field</option><option>analyst</option><option>viewer</option></select></label>
+  <button id="reload">刷新</button>
+</div>
+<div id="notice"></div>
+<div id="conflict"></div>
+
+<fieldset><legend>创建派单</legend>
+  区域 <select id="as-area"></select> 资源 <select id="as-asset"></select>
+  事件版本 <input id="as-iv" size="3"> 区域版本 <input id="as-av" size="3"> 资源版本 <input id="as-sv" size="3">
+  <button id="as-submit">提交派单</button>
+</fieldset>
+<fieldset><legend>改派（先冻结事件与区域版本）</legend>
+  派单 <select id="ra-asg"></select> 新资源 <select id="ra-asset"></select>
+  事件版本 <input id="ra-iv" size="3"> 区域版本 <input id="ra-av" size="3">
+  <button id="ra-submit">提交改派</button>
+</fieldset>
+<fieldset><legend>海况更新（触发派单重算）</legend>
+  事件 <select id="ss-inc"></select> 新海况 <input id="ss-val" size="2" type="number" min="0" max="9" value="5">
+  事件版本 <input id="ss-iv" size="3"> <button id="ss-submit">更新海况</button>
+</fieldset>
+
+<h2>遇险事件</h2><table id="incidents"><thead><tr><th>编号</th><th>船名</th><th>状态</th><th>海况</th><th>负责机构</th><th>版本</th><th>操作</th></tr></thead><tbody></tbody></table>
+<h2>资源</h2><table id="assets"><thead><tr><th>名称</th><th>类型</th><th>状态</th><th>航程</th><th>适用海况</th><th>版本</th><th>操作</th></tr></thead><tbody></tbody></table>
+<h2>搜索区域</h2><table id="areas"><thead><tr><th>编号</th><th>事件</th><th>状态</th><th>优先级</th><th>资源</th><th>版本</th><th>操作</th></tr></thead><tbody></tbody></table>
+<h2>派单</h2><table id="assignments"><thead><tr><th>ID</th><th>事件</th><th>区域</th><th>资源</th><th>状态</th><th>依据</th><th>待核原因</th><th>操作</th></tr></thead><tbody></tbody></table>
+<h2>线索</h2><table id="clues"><thead><tr><th>ID</th><th>事件</th><th>状态</th><th>置信度</th><th>来源</th><th>并列冲突</th></tr></thead><tbody></tbody></table>
+<h2>离线批次</h2><table id="batches"><thead><tr><th>批次号</th><th>提交人</th><th>状态</th><th>接收时间</th><th>合并时间</th></tr></thead><tbody></tbody></table>
 <h2>时间线</h2><ol id="timeline"></ol>
-<script>async function load(){const d=await fetch('/api/state').then(r=>r.json());const fill=(id,rows,cols)=>{document.querySelector('#'+id+' tbody').innerHTML=rows.map(r=>'<tr>'+cols.map(c=>`<td>${r[c]??''}</td>`).join('')+'</tr>').join('')};fill('incidents',d.incidents,['code','vessel_name','status','sea_state','lead_org','version']);fill('assets',d.assets,['name','kind','status','range_km']);fill('areas',d.search_areas,['code','incident_id','status','priority','assigned_asset_id']);document.querySelector('#timeline').innerHTML=d.timeline.slice(0,20).map(x=>`<li>${x.created_at} ${x.action} ${x.details}</li>`).join('')}load()</script></html>
+<script>
+const $=s=>document.querySelector(s);
+let state=null,lastConflict=null;
+const ZH={pending:'未执行',active:'执行中',invalidated:'已失效',superseded:'已被改派',completed:'已完成',
+  planned:'待派',assigned:'已派单',available:'可用',assigned_asset:'已占用',withdrawn:'已撤回',
+  reported:'已报警',coordinating:'协调中',recovering:'救援中',closed:'已关闭',cancelled:'已取消',duplicate:'重复报警',
+  abandoned:'已放弃',merged:'已合并',failed:'写入失败',processing:'处理中'};
+const zh=s=>ZH[s]||s;
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function notice(msg,ok){const n=$('#notice');n.textContent=msg;n.className=ok?'ok':'err'}
+async function load(){state=await fetch('/api/state').then(r=>r.json());render()}
+async function api(path,body,source){
+  const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-User':$('#user').value,'X-Role':$('#role').value},body:JSON.stringify(body)});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){
+    if(d.conflict){lastConflict={...d.conflict,source};renderConflict()}
+    notice(d.error||('HTTP '+r.status),false);
+    throw new Error(d.error||'failed');
+  }
+  $('#conflict').style.display='none';lastConflict=null;
+  notice('操作成功',true);
+  await load();
+  return d;
+}
+function renderConflict(){
+  const c=$('#conflict'),cur=lastConflict.current||{};
+  const ver=o=>o?`v${o.version}（${zh(o.status)}${o.sea_state!==undefined?'，海况'+o.sea_state:''}）`:'—';
+  c.innerHTML='<b>提交冲突，草稿已保留。</b> 最新状态：'
+    +['incident','area','asset','assignment'].filter(k=>cur[k]).map(k=>`${{incident:'事件',area:'区域',asset:'资源',assignment:'派单'}[k]} ${ver(cur[k])}`).join('；')
+    +`<br><span class="muted">你的草稿：${esc(JSON.stringify(lastConflict.draft))}</span> `
+    +'<button id="cf-apply">采用最新版本并保留草稿</button>';
+  c.style.display='block';
+  $('#cf-apply').onclick=()=>{
+    if(lastConflict.source==='assign'){if(cur.incident)$('#as-iv').value=cur.incident.version;if(cur.area)$('#as-av').value=cur.area.version;if(cur.asset)$('#as-sv').value=cur.asset.version}
+    if(lastConflict.source==='reassign'){if(cur.incident)$('#ra-iv').value=cur.incident.version;if(cur.area)$('#ra-av').value=cur.area.version}
+    if(lastConflict.source==='sea'){if(cur.incident)$('#ss-iv').value=cur.incident.version}
+    notice('已填入最新版本，草稿保留，请重新提交',true);
+  };
+}
+function fill(id,rows,cols){document.querySelector('#'+id+' tbody').innerHTML=rows.map(r=>'<tr>'+cols.map(c=>'<td>'+c(r)+'</td>').join('')+'</tr>').join('')}
+function keepSelect(sel,items,label){
+  const prev=sel.value;
+  sel.innerHTML=items.map(i=>`<option value="${i.id}">${esc(label(i))}</option>`).join('');
+  if(items.some(i=>String(i.id)===prev))sel.value=prev;
+}
+function render(){
+  fill('incidents',state.incidents,[i=>esc(i.code),i=>esc(i.vessel_name),i=>`<span class="badge">${zh(i.status)}</span>`,i=>i.sea_state,i=>esc(i.lead_org),i=>i.version,
+    i=>['reported','coordinating','recovering'].includes(i.status)?`<button data-close="${i.id}" data-v="${i.version}">关闭</button>`:'']);
+  fill('assets',state.assets,[a=>esc(a.name),a=>esc(a.kind),a=>`<span class="badge">${zh(a.status)}</span>`,a=>a.range_km,a=>a.max_sea_state,a=>a.version,
+    a=>a.status!=='available'?`<button data-withdraw="${a.id}" data-v="${a.version}">撤回</button>`:'']);
+  fill('areas',state.search_areas,[a=>esc(a.code),a=>a.incident_id,a=>`<span class="badge">${zh(a.status)}</span>`,a=>a.priority,a=>a.assigned_asset_id??'',a=>a.version,
+    a=>['planned','assigned','active'].includes(a.status)?`<button data-complete="${a.id}" data-v="${a.version}">结束</button>`:'']);
+  fill('assignments',state.assignments,[a=>a.id,a=>a.incident_id,a=>a.area_id,a=>a.asset_id,
+    a=>`<span class="badge">${zh(a.status)}</span>`,
+    a=>{const b=a.basis||{};return `<span class="muted">海况${b.sea_state??'?'} / ${b.distance_km??'?'}km / 事件v${b.incident_version??'?'}·区域v${b.area_version??'?'}·资源v${b.asset_version??'?'}</span>`},
+    a=>a.review_reasons&&a.review_reasons.length?`<span class="reason">${a.review_reasons.map(esc).join('<br>')}</span>`:'',
+    a=>{const btns=[];if(a.status==='pending')btns.push(`<button data-start="${a.id}" data-v="${a.version}">开始执行</button>`);
+      if(a.review_reasons&&a.review_reasons.length&&['pending','active'].includes(a.status)){btns.push(`<button data-confirm="${a.id}" data-v="${a.version}">复核确认</button>`);btns.push(`<button data-invalidate="${a.id}" data-v="${a.version}">复核失效</button>`)}
+      return btns.join('')}]);
+  fill('clues',state.clues,[c=>c.id,c=>c.incident_id,c=>`<span class="badge">${zh(c.status)}</span>`,c=>c.confidence,c=>esc(c.source),
+    c=>{const f=JSON.parse(c.conflicts||'[]');return f.length?f.map(x=>Object.entries(x.fields).map(([k,v])=>`${k}: ${esc(JSON.stringify(v.kept))} ‖ ${esc(JSON.stringify(v.incoming))}`).join('；')).join('<br>'):''}]);
+  fill('batches',state.offline_batches,[b=>esc(b.client_batch_id),b=>esc(b.actor),b=>`<span class="badge">${zh(b.status)}</span>`,b=>esc(b.received_at),b=>esc(b.merged_at||'')]);
+  $('#timeline').innerHTML=state.timeline.slice(0,40).map(x=>{
+    let d={};try{d=JSON.parse(x.details||'{}')}catch(e){}
+    const asg=d.assignment_id||d.new_assignment_id?` <span class="badge">派单#${d.assignment_id||d.new_assignment_id}</span>`:'';
+    const reason=d.reason?` <span class="reason">原因：${esc(d.reason)}</span>`:'';
+    return `<li><code>${esc(x.created_at)}</code> ${esc(x.actor)} <b>${esc(x.action)}</b>${asg}${reason} <span class="muted">${esc(x.details)}</span></li>`;
+  }).join('');
+  const planned=state.search_areas.filter(a=>a.status==='planned');
+  const avail=state.assets.filter(a=>a.status==='available');
+  const open=state.assignments.filter(a=>['pending','active'].includes(a.status));
+  const active=state.incidents.filter(i=>['reported','coordinating','recovering'].includes(i.status));
+  keepSelect($('#as-area'),planned,a=>`#${a.id} ${a.code}（事件${a.incident_id}）`);
+  keepSelect($('#as-asset'),avail,a=>`#${a.id} ${a.name}`);
+  keepSelect($('#ra-asg'),open,a=>`#${a.id} 区域${a.area_id}→资源${a.asset_id}（${zh(a.status)}）`);
+  keepSelect($('#ra-asset'),avail,a=>`#${a.id} ${a.name}`);
+  keepSelect($('#ss-inc'),active,i=>`#${i.id} ${i.code}（海况${i.sea_state}）`);
+}
+function syncVersions(){
+  const area=state.search_areas.find(a=>String(a.id)===$('#as-area').value);
+  if(area){$('#as-av').value=area.version;const inc=state.incidents.find(i=>i.id===area.incident_id);if(inc)$('#as-iv').value=inc.version}
+  const asset=state.assets.find(a=>String(a.id)===$('#as-asset').value);
+  if(asset)$('#as-sv').value=asset.version;
+  const asg=state.assignments.find(a=>String(a.id)===$('#ra-asg').value);
+  if(asg){const inc=state.incidents.find(i=>i.id===asg.incident_id);const ar=state.search_areas.find(a=>a.id===asg.area_id);
+    if(inc)$('#ra-iv').value=inc.version;if(ar)$('#ra-av').value=ar.version}
+  const ssi=state.incidents.find(i=>String(i.id)===$('#ss-inc').value);
+  if(ssi)$('#ss-iv').value=ssi.version;
+}
+$('#as-area').onchange=syncVersions;$('#as-asset').onchange=syncVersions;
+$('#ra-asg').onchange=syncVersions;$('#ss-inc').onchange=syncVersions;
+$('#reload').onclick=()=>load().then(syncVersions);
+$('#as-submit').onclick=()=>api('/api/assignments',{area_id:+$('#as-area').value,asset_id:+$('#as-asset').value,
+  expected_incident_version:+$('#as-iv').value,expected_area_version:+$('#as-av').value,expected_asset_version:+$('#as-sv').value},'assign').then(syncVersions);
+$('#ra-submit').onclick=()=>api('/api/assignments/reassign',{assignment_id:+$('#ra-asg').value,new_asset_id:+$('#ra-asset').value,
+  expected_incident_version:+$('#ra-iv').value,expected_area_version:+$('#ra-av').value},'reassign').then(syncVersions);
+$('#ss-submit').onclick=()=>api('/api/incidents/sea-state',{incident_id:+$('#ss-inc').value,sea_state:+$('#ss-val').value,expected_version:+$('#ss-iv').value},'sea').then(syncVersions);
+document.body.addEventListener('click',async e=>{
+  const t=e.target.dataset;
+  try{
+    if(t.start)await api('/api/assignments/start',{assignment_id:+t.start,expected_version:+t.v});
+    else if(t.confirm)await api('/api/assignments/review',{assignment_id:+t.confirm,decision:'confirm',expected_version:+t.v});
+    else if(t.invalidate){const note=prompt('失效原因','依据不再成立');if(note===null)return;await api('/api/assignments/review',{assignment_id:+t.invalidate,decision:'invalidate',expected_version:+t.v,note})}
+    else if(t.withdraw){const reason=prompt('撤回原因','任务调整');if(!reason)return;await api('/api/assets/withdraw',{asset_id:+t.withdraw,reason,expected_asset_version:+t.v})}
+    else if(t.complete)await api('/api/areas/complete',{area_id:+t.complete,outcome:'completed',expected_version:+t.v});
+    else if(t.close){const outcome=prompt('结束结论 resolved/cancelled/false_alarm','resolved');if(!outcome)return;await api('/api/incidents/close',{incident_id:+t.close,outcome,expected_version:+t.v})}
+    else return;
+    syncVersions();
+  }catch(err){/* 冲突与错误已在页面提示 */}
+});
+load().then(syncVersions);
+</script></html>
